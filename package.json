@@ -1,0 +1,22 @@
+{
+  "name": "rotary-ai-assistant",
+  "version": "1.0.0",
+  "description": "Rotary phone AI assistant using Asterisk EAGI and Gemini Live API",
+  "type": "module",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "deploy": "bash scripts/deploy.sh"
+  },
+  "dependencies": {
+    "@google/genai": "^1.0.0",
+    "dotenv": "^16.4.0",
+    "zod": "^3.22.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "typescript": "^5.3.0",
+    "vitest": "^4.1.0"
+  }
+}
