@@ -19,7 +19,12 @@ echo "=== Deploying to ${PI_HOST} ==="
 ssh "$PI_HOST" "sudo mkdir -p ${REMOTE_AGI} && mkdir -p /tmp/rotary-deploy"
 
 # Copy application files
-scp -r dist package.json package-lock.json .env "$PI_HOST:/tmp/rotary-deploy/"
+# Copy optional config files if they exist
+EXTRA_FILES=""
+for f in contacts.json agent.json; do
+  [ -f "$f" ] && EXTRA_FILES="$EXTRA_FILES $f"
+done
+scp -r dist package.json package-lock.json .env $EXTRA_FILES "$PI_HOST:/tmp/rotary-deploy/"
 ssh "$PI_HOST" "sudo cp -r /tmp/rotary-deploy/* ${REMOTE_AGI}/ && rm -rf /tmp/rotary-deploy"
 
 # Backup and copy Asterisk configs

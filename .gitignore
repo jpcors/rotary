@@ -6,3 +6,5 @@ dist/
 *.wav
 *.raw
 pnpm-lock.yaml
+contacts.json
+agent.json

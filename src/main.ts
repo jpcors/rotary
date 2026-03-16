@@ -7,6 +7,8 @@ import { GeminiLiveSession } from "./gemini/live-session.js";
 import { StreamingPlayer } from "./audio/streaming-player.js";
 import { upsample8to16 } from "./audio/resampler.js";
 import { log, logError } from "./lib/logger.js";
+import { loadAgentConfig, buildGreetingPrompt } from "./lib/agent.js";
+import { loadTools } from "./tools/registry.js";
 
 // Import config to trigger env validation
 import "./lib/config.js";
@@ -34,7 +36,9 @@ async function main(): Promise<void> {
     },
   });
 
-  // Step 4: Connect to Gemini
+  // Step 4: Load agent config and tools, connect to Gemini
+  const agentConfig = loadAgentConfig();
+  const tools = loadTools();
   const gemini = new GeminiLiveSession(
     // onAudio: push chunks to streaming player (plays ASAP)
     (pcm24kHz: Buffer) => {
@@ -44,13 +48,15 @@ async function main(): Promise<void> {
     () => {
       log("Gemini turn complete");
       player.turnComplete();
-    }
+    },
+    tools,
+    agentConfig
   );
 
   await gemini.connect();
 
   // Step 5: Send initial greeting prompt so Gemini speaks first
-  gemini.sendText("The caller just picked up the phone. Greet them warmly and briefly.");
+  gemini.sendText(buildGreetingPrompt(agentConfig));
 
   // Step 6: Start reading audio from fd3 and forwarding to Gemini
   audioReader.start((chunk: Buffer) => {

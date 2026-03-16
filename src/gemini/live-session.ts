@@ -1,6 +1,8 @@
-import { GoogleGenAI, Modality, type Session } from "@google/genai";
+import { GoogleGenAI, Modality, type Session, type FunctionCall } from "@google/genai";
 import { env } from "../lib/config.js";
 import { log, logError } from "../lib/logger.js";
+import { type AgentConfig, buildSystemInstruction } from "../lib/agent.js";
+import type { Tool } from "../tools/types.js";
 
 export type AudioResponseCallback = (pcm24kHz: Buffer) => void;
 export type TurnCompleteCallback = () => void;
@@ -10,15 +12,31 @@ export class GeminiLiveSession {
   private session: Session | null = null;
   private onAudio: AudioResponseCallback;
   private onTurnComplete: TurnCompleteCallback;
+  private toolMap: Map<string, Tool>;
 
-  constructor(onAudio: AudioResponseCallback, onTurnComplete: TurnCompleteCallback) {
+  private agentConfig: AgentConfig;
+
+  constructor(
+    onAudio: AudioResponseCallback,
+    onTurnComplete: TurnCompleteCallback,
+    tools: Tool[] = [],
+    agentConfig: AgentConfig = { name: "Rotary", personality: "You are a friendly AI assistant." }
+  ) {
     this.ai = new GoogleGenAI({ apiKey: env.GEMINI_API_KEY });
     this.onAudio = onAudio;
     this.onTurnComplete = onTurnComplete;
+    this.agentConfig = agentConfig;
+    this.toolMap = new Map(
+      tools.filter((t) => t.declaration.name).map((t) => [t.declaration.name!, t])
+    );
   }
 
   async connect(): Promise<void> {
     const voiceName = env.AI_VOICE;
+
+    const tools = this.toolMap.size > 0
+      ? [{ functionDeclarations: [...this.toolMap.values()].map((t) => t.declaration) }]
+      : undefined;
 
     this.session = await this.ai.live.connect({
       model: "gemini-2.5-flash-native-audio-preview-12-2025",
@@ -30,17 +48,15 @@ export class GeminiLiveSession {
           },
         },
         // Using default VAD settings (no custom realtimeInputConfig)
-        systemInstruction:
-          "You are a friendly AI assistant answering a call on a rotary telephone. " +
-          "Keep responses concise and conversational. The caller is using a vintage rotary phone, " +
-          "so audio quality may be limited — there will be background noise and static on the line. " +
-          "Do not interpret line noise as the caller trying to speak. Be warm, helpful, and to the point.",
+        systemInstruction: buildSystemInstruction(this.agentConfig),
+        tools,
       },
       callbacks: {
         onopen: () => {
           log("Gemini Live session connected");
         },
         onmessage: (message) => {
+          // Handle audio responses
           const content = message.serverContent;
           if (content?.modelTurn?.parts) {
             for (const part of content.modelTurn.parts) {
@@ -53,6 +69,11 @@ export class GeminiLiveSession {
           if (content?.turnComplete) {
             this.onTurnComplete();
           }
+
+          // Handle function calls
+          if (message.toolCall?.functionCalls) {
+            this.handleFunctionCalls(message.toolCall.functionCalls);
+          }
         },
         onerror: (e: any) => {
           logError(`Gemini error: ${e.message || JSON.stringify(e)}`);
@@ -64,6 +85,47 @@ export class GeminiLiveSession {
     });
 
     log("Gemini Live session ready");
+  }
+
+  private async handleFunctionCalls(functionCalls: FunctionCall[]): Promise<void> {
+    const responses = [];
+
+    for (const call of functionCalls) {
+      const name = call.name ?? "unknown";
+      const tool = this.toolMap.get(name);
+      if (!tool) {
+        logError(`Unknown function call: ${name}`);
+        responses.push({
+          id: call.id,
+          name,
+          response: { error: `Unknown function: ${name}` },
+        });
+        continue;
+      }
+
+      log(`Executing tool: ${name}(${JSON.stringify(call.args)})`);
+
+      try {
+        const result = await tool.handler(call.args ?? {});
+        log(`Tool result: ${JSON.stringify(result)}`);
+        responses.push({
+          id: call.id,
+          name,
+          response: result,
+        });
+      } catch (err: any) {
+        logError(`Tool execution error: ${err.message}`);
+        responses.push({
+          id: call.id,
+          name,
+          response: { error: err.message },
+        });
+      }
+    }
+
+    if (this.session && responses.length > 0) {
+      this.session.sendToolResponse({ functionResponses: responses });
+    }
   }
 
   /**
